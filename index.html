@@ -26,8 +26,31 @@ async function loadEntries(){const {data,error}=await db.from('point_entries').s
 async function change(i,delta){const a=activities[i],date=localDate();const matches=entries.filter(e=>e.entry_date===date&&e.activity===a[1]&&e.category===a[0]&&e.points===a[2]);const qty=matches.reduce((s,e)=>s+e.quantity,0);if(delta>0){const {error}=await db.from('point_entries').insert({user_id:user.id,activity:a[1],category:a[0],points:a[2],quantity:1,entry_date:date});if(error)return alert(error.message)}else{if(qty<=0)return;const last=matches[matches.length-1];const {error}=await db.from('point_entries').delete().eq('id',last.id).eq('user_id',user.id);if(error)return alert(error.message)}await loadEntries();}
 async function loadLeaderboard(){const {data,error}=await db.from('leaderboard').select('*').order('season_points',{ascending:false});if(error)return alert(error.message);leaderRows.innerHTML=(data||[]).map((r,i)=>`<tr><td>${i+1}</td><td><strong>${r.display_name}</strong></td><td class="right">${r.today_points}</td><td class="right">${r.week_points}</td><td class="right"><strong>${r.season_points}</strong></td></tr>`).join('')||'<tr><td colspan="5">No scores yet.</td></tr>'}
 async function showSession(){const {data:{session}}=await db.auth.getSession();user=session?.user||null;auth.classList.toggle('hidden',!!user);app.classList.toggle('hidden',!user);if(user){const {data:p}=await db.from('profiles').select('display_name').eq('id',user.id).single();welcome.textContent=p?.display_name||user.email;await loadEntries();await loadLeaderboard()}}
-signup.onclick=async()=>{authMsg.textContent='Creating account…';const {error}=await db.auth.signUp({email:email.value.trim(),password:password.value,options:{data:{display_name:name.value.trim()||email.value.split('@')[0]}}});authMsg.textContent=error?error.message:'Account created. Signing you in…';authMsg.className='msg '+(error?'danger':'good');if(!error)await showSession()};
-signin.onclick=async()=>{authMsg.textContent='Signing in…';const {error}=await db.auth.signInWithPassword({email:email.value.trim(),password:password.value});authMsg.textContent=error?error.message:'';authMsg.className='msg danger';if(!error)await showSession()};
+function withTimeout(promise,ms=15000){return Promise.race([promise,new Promise((_,reject)=>setTimeout(()=>reject(new Error('Connection timed out after 15 seconds. Supabase may be experiencing network latency. Please wait a minute and try again.')),ms))])}
+function setAuthBusy(busy,label=''){signup.disabled=busy;signin.disabled=busy;signup.textContent=busy&&label==='signup'?'Creating…':'Create Account';signin.textContent=busy&&label==='signin'?'Signing in…':'Sign In'}
+signup.onclick=async()=>{
+  const em=email.value.trim(), pw=password.value, dn=name.value.trim();
+  authMsg.className='msg muted';
+  if(!em||!pw){authMsg.textContent='Enter your email and password.';authMsg.className='msg danger';return}
+  if(pw.length<6){authMsg.textContent='Password must be at least 6 characters.';authMsg.className='msg danger';return}
+  setAuthBusy(true,'signup');authMsg.textContent='Connecting to Supabase…';
+  try{
+    const {data,error}=await withTimeout(db.auth.signUp({email:em,password:pw,options:{data:{display_name:dn||em.split('@')[0]}}}));
+    if(error)throw error;
+    if(!data?.user)throw new Error('Supabase did not return a user account. Please try again.');
+    authMsg.textContent=data.session?'Account created — loading your tracker…':'Account created. If email confirmation is enabled, check your inbox.';authMsg.className='msg good';
+    if(data.session)await showSession();
+  }catch(err){authMsg.textContent=err?.message||'Could not create account. Please try again.';authMsg.className='msg danger'}
+  finally{setAuthBusy(false)}
+};
+signin.onclick=async()=>{
+  const em=email.value.trim(), pw=password.value;
+  if(!em||!pw){authMsg.textContent='Enter your email and password.';authMsg.className='msg danger';return}
+  setAuthBusy(true,'signin');authMsg.textContent='Connecting to Supabase…';authMsg.className='msg muted';
+  try{const {error}=await withTimeout(db.auth.signInWithPassword({email:em,password:pw}));if(error)throw error;authMsg.textContent='Signed in — loading your tracker…';authMsg.className='msg good';await showSession()}
+  catch(err){authMsg.textContent=err?.message||'Could not sign in. Please try again.';authMsg.className='msg danger'}
+  finally{setAuthBusy(false)}
+};
 signout.onclick=async()=>{await db.auth.signOut();await showSession()};
 document.addEventListener('click',e=>{if(e.target.dataset.plus!==undefined)change(+e.target.dataset.plus,1);if(e.target.dataset.minus!==undefined)change(+e.target.dataset.minus,-1);if(e.target.dataset.tab){document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===e.target));tracker.classList.toggle('hidden',e.target.dataset.tab!=='tracker');leaderboard.classList.toggle('hidden',e.target.dataset.tab!=='leaderboard');if(e.target.dataset.tab==='leaderboard')loadLeaderboard()}});
 buildRows();db.auth.onAuthStateChange(()=>showSession());showSession();
